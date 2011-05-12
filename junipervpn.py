@@ -93,7 +93,7 @@ class JuniperVPN:
     def getUserInfo(self):
         """Prompts the user for their token and optionally their password."""
         print "Preparing to login."
-        # If you didn't fill in the NT password, it'll prompt for that.
+        # If you didn't fill in the password, it'll prompt for that.
         if self.password == "":
             self.password = raw_input("Password:  ")
         # Now it will prompt the user for the SecurID token
@@ -142,10 +142,10 @@ class JuniperVPN:
         # Prompt for input
         user = raw_input("Username:  ")
         pin  = raw_input("PIN:  ")
-        store = raw_input("Store NT Password? (Y|n):  ").strip().lower()
+        store = raw_input("Store Password? (Y|n):  ").strip().lower()
         if (store == "" or store == "y"):
             # Only prompt for the password if they've elected to store it
-            passwd = raw_input("NT Password:  ").strip()
+            passwd = raw_input("Password:  ").strip()
         else:
             passwd = None
             
