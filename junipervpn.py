@@ -1,16 +1,30 @@
 #!/usr/bin/env python
+# -*- coding: latin-1 -*-
+
+import argparse
+import ConfigParser
+import cookielib
+import logging
+import os
+import re
+import shlex
+import stat
+import subprocess
+import sys
 import urllib
 import urllib2
-import cookielib
-import os
-import stat
-import sys
-from urlparse import urlparse
-import subprocess
-import shlex
-import ConfigParser
-import argparse
-import logging
+import urlparse
+
+
+## Order of the required arguments per page/tuple
+AUTH_KEYS = [ ('username', 'realm'), ('password',), ('user#2', 'password#2') ]
+
+## How do I know I have a hung session? Search for this string
+HUNG_SESSION_KEY = 'btnContinue'
+
+## Ugly, but venerable RE's to get the form data
+FORM_KEY = re.compile("""\<input\ type\="hidden"\ name\=\"(\S+)\"\ value\=\"(\S+)\"\>""", re.VERBOSE)
+FORM_URI = re.compile("""\<form\ .*?\ action\=\"(?P<Uri>\S+)\" """, re.VERBOSE)
 
 
 class JuniperVPN:
@@ -40,13 +54,33 @@ class JuniperVPN:
     
         This script assumes many things about the method for logging in.  
         Please see the login() method if you need to tweak anything.
+
+    Additions:
+      - Some implemntations have multiple pages that require sundry auth data. For example
+        the username & realm on the first page, the pin on the next, etc...
+        Added the ability to cycle through each page providing the respective auth data. This
+        is configured by the AUTH_KEYS variable above. Just look at the source of each page
+        (in order) and grab the names of the needed input variables in the form. Provide them 
+        as a tuple of the AUTH_KEYS variable, and the script will use them. Page #1 is tuple[0],
+        page 2 is tuple[1], etc..
+
+      - In the course of a day, your connection may get..well.. disconnected. The ncui does not
+        gracefully exit connections, so you would have to authenticate with a web browser 
+        and gracefully exit your session before using the script again. Since the DSID is still
+        good, unless the server disconnects you for a timeout, bad behavior, stinky feet, etc..,
+        thus the session can be re-established without another authentication. An option is now
+        presented to allow the connection to be re-used if you know you have one. If you don't 
+        know whether you have one or not, just authenticate normally and if there is a hung session
+        the script will use that session instead of creating another.
     
     """
 
     def __init__(self):
         # Configuration file
-        self.config = os.path.expanduser("~/.junipervpn")
-        self.section = "junipervpn"
+        self.config      = os.path.expanduser("~/.junipervpn")
+        self.lastDsid    = os.path.expanduser("~/.junipervpn_ID")
+        self.section     = "junipervpn"
+        self.hungSession = False
         
         # log file
         self.logFile = "~/.junipervpn.log"
@@ -85,32 +119,72 @@ class JuniperVPN:
             sys.exit("Unable to find SSL certificate.")
 
         # Prepare the cookie jar for the vpn website.
-        self.cj = cookielib.CookieJar()
-        self.opener = urllib2.build_opener(
-                            urllib2.HTTPCookieProcessor(self.cj))
-        self.host = urlparse(self.url).netloc
+        self.cj     = cookielib.CookieJar()
+        self.Opener = urllib2.build_opener( urllib2.HTTPSHandler(), urllib2.HTTPCookieProcessor(self.cj) )
+        self.host   = urlparse.urlparse(self.url).netloc
 
     def getUserInfo(self):
         """Prompts the user for their token and optionally their password."""
+        ## If I know I have a dormant session, just use that
+        if raw_input('Want To Try Using Your Old Session (y)') == 'y' : 
+          self.doLogin = False
+          return
+        else : 
+          self.doLogin = True
         print "Preparing to login."
         # If you didn't fill in the password, it'll prompt for that.
-        if self.password == "":
-            self.password = raw_input("Password:  ")
+        if self.password == "" : self.password = raw_input("Password:  ")
         # Now it will prompt the user for the SecurID token
         self.pintoken = self.pin + raw_input("Token:  ")
 
+        ## Create a dict of auth data so we can configure all of the options in the script head
+        self.AuthData = {
+          'username'    : self.username,
+          'realm'       : self.realm,
+          'password'    : self.pintoken,
+          'user#2'      : self.username, 
+          'password#2'  : self.password,
+        }
+
+
     def login(self):
-        """Attempts to login with the provided credentials."""
-        loginData = urllib.urlencode({'username'  : self.username,
-                                      'password'  : self.pintoken,
-                                      'password#2': self.password,
-                                      'realm'     : self.realm})
+        """Attempts to navigate through the multitude of pages to login"""
+        ## Open the first page to get'r started
         try:
-            self.opener.open(self.url, loginData)
+          Page = self.Opener.open( self.url ).read()
         except ValueError:
-            logging.debug("Unable to login; invalid url: ('%s')" % self.url)
-            sys.exit("Invalid url: '%s'" % self.url)
-        logging.debug("Logging into %s..." % self.url)
+          logging.debug("Invalid Start URL: ('%s')" % self.url )
+          sys.exit("Invalid Start URL: '%s'" % Url )
+
+        ## Unpack the authKeys (which navigate us through the pages) 
+        for Items in AUTH_KEYS:
+
+          ## Grab the next URL
+          Match = re.search( FORM_URI, Page )
+          if not Match :
+            logging.debug("Unable to grab the URI from the form in ('%s'). Better check the regExp" % Url )
+            sys.exit("No URI Found In Form at URL: '%s'" % Url )
+
+          AuthD = {}
+          ## Add any hidden keys that the form requires as we lament the stateless nature of http....(sigh)..
+          for (Key, Val) in re.findall( FORM_KEY, Page ) : AuthD[ Key ] = Val
+
+          ## Put together the authData for this page
+          for Key in Items : AuthD[ Key ] = self.AuthData[ Key ]
+
+          ## Using the UrlJoin we'll fashion the next URL
+          Url = urlparse.urljoin( self.url, Match.groupdict()['Uri'] )
+
+          ## Encode the Args ( there won't be any for the intro pageOpen the page and send the data
+          try:
+            Page = self.Opener.open( Url, urllib.urlencode( AuthD ) ).read()
+          except ValueError:
+            logging.debug("Unable to perform login. Invalid url: ('%s')" % Url )
+            sys.exit("Invalid URL: '%s'" % Url )
+
+          ## Check for hung sessions
+          if Page.find( HUNG_SESSION_KEY ) > -1 : self.hungSession = True
+
 
     def getDSIDValue(self):
         """Retrieves the value of the DSID cookie."""
@@ -123,9 +197,16 @@ class JuniperVPN:
 
     def startVPN(self):
         """Calls the executable with the appropriate options."""
+        ## Hung session? Use the last known DSID
+        if self.hungSession or not self.doLogin: 
+          DSID = open( self.lastDsid ).read()
+        else                : 
+          DSID = self.getDSIDValue()
+          open( self.lastDsid, 'wb' ).write( DSID )
+
         cmd = '%s -h %s -c DSID=%s -f %s' % (os.path.expanduser(self.ncui),
                                              self.host,
-                                             self.getDSIDValue(),
+                                             DSID,
                                              os.path.expanduser(self.cert))
         print "Starting VPN connection..."
         logging.debug("Calling ncui exec with: %s" % cmd)
@@ -162,12 +243,8 @@ class JuniperVPN:
             cert = certDefault
             
         # The URl of the page you'd login to
-        url = raw_input("Login Page URL:  ").strip()
-        realmDefault = "SecurID"
-        prompt = "Realm:  (%s):  " % realmDefault
-        realm = raw_input(prompt).strip()
-        if (realm == ""):
-            realm = realmDefault
+        url    = raw_input("Login Page URL (Paste the URL from your browser at the first login page here): ").strip()
+        realm  = raw_input("Realm: ").strip()
             
         # Create the config object    
         config = ConfigParser.RawConfigParser()
@@ -224,7 +301,7 @@ class JuniperVPN:
     def run(self):
         """Handles the thread of execution."""
         self.getUserInfo()
-        self.login()
+        if self.doLogin : self.login()
         self.startVPN()
 
     def stop(self):
