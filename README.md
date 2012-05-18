@@ -12,28 +12,29 @@ Juniper VPN two-factor authentication automation
 
 ## Installation & Usage
 
-1. Authenticate to the Juniper web interface, and launch Network Connect.  This should place the needed files in your ~/.juniper_networks directory.
+1. Authenticate to your Juniper web interface, and launch Network Connect.  This should place the needed files in your ~/.juniper_networks directory.
 
 2. Install gcc-multilib for 32bit compiler/linker support
-
+```bash
    sudo apt-get install gcc-multilib
-
+```
 3. Convert Juniper's ncui.so into an executable:
-
-    cd ~/.juniper_networks/network_connect
-    gcc -m32 -Wl,-rpath,`pwd` -o ncui libncui.so
-    sudo chown root:root ncui
-    sudo chmod 4775 ncui
-
+```bash
+cd ~/.juniper_networks/network_connect
+gcc -m32 -Wl,-rpath,`pwd` -o ncui libncui.so
+sudo chown root:root ncui
+sudo chmod 4775 ncui
+```
 4. Download your Juniper SSL certificate:
-
-    cd ~/.juniper_networks/network_connect
-    echo | openssl s_client -connect junipervpn.example.com:443 2>&1 | sed -ne '/-BEGIN CERTIFICATE-/,/-END CERTIFICATE-/p' | openssl x509 -outform der > ssl.crt
-
+```bash
+cd ~/.juniper_networks/network_connect
+echo | openssl s_client -connect junipervpn.example.com:443 2>&1 | sed -ne '/-BEGIN CERTIFICATE-/,/-END CERTIFICATE-/p' | openssl x509 -outform der > ssl.crt
+```bash
 5. Create the config file: 
-
+```bash
     python junipervpn.py --create
-
+```
 6. Start the client:
-
+```bash
     python junipervpn.py
+```
