@@ -4,6 +4,7 @@
 import argparse
 import ConfigParser
 import cookielib
+import getpass
 import logging
 import os
 import re
@@ -72,6 +73,9 @@ class JuniperVPN:
         presented to allow the connection to be re-used if you know you have one. If you don't 
         know whether you have one or not, just authenticate normally and if there is a hung session
         the script will use that session instead of creating another.
+
+      - Allow the omission of Pin and password in the config file. When prompting for password
+        use getpass to keep it off the terminal.
     
     """
 
@@ -133,9 +137,13 @@ class JuniperVPN:
           self.doLogin = True
         print "Preparing to login."
         # If you didn't fill in the password, it'll prompt for that.
-        if self.password == "" : self.password = raw_input("Password:  ")
-        # Now it will prompt the user for the SecurID token
-        self.pintoken = self.pin + raw_input("Token:  ")
+        if not self.password:
+            self.password = getpass.getpass('Password:')
+        if self.pin:
+            # Now it will prompt the user for the SecurID token
+            self.pintoken = self.pin + raw_input("Token:  ")
+        else:
+            self.pintoken = self.pin + raw_input("Enter Pin AND Token (e.g. 1234567890):  ")
 
         ## Create a dict of auth data so we can configure all of the options in the script head
         self.AuthData = {
@@ -222,13 +230,16 @@ class JuniperVPN:
         logging.debug("Creating new config file: ('%s')" % self.config)
         # Prompt for input
         user = raw_input("Username:  ")
-        pin  = raw_input("PIN:  ")
-        store = raw_input("Store Password? (Y|n):  ").strip().lower()
-        if (store == "" or store == "y"):
-            # Only prompt for the password if they've elected to store it
-            passwd = raw_input("Password:  ").strip()
+        # Only prompt for the pin if they've elected to store it
+        if raw_input("Store Pin? (Y|n):  ").strip().lower() == 'n':
+            pin = ''
         else:
-            passwd = None
+            pin = raw_input("PIN:  ")
+        # Only prompt for the password if they've elected to store it
+        if raw_input("Store Password? (Y|n):  ").strip().lower() == 'n':
+            passwd = ''
+        else:
+            passwd = raw_input("Password:  ").strip()
             
         # defaults for the program / certificate
         ncuiDefault = "~/.juniper_networks/network_connect/ncui"
@@ -250,10 +261,7 @@ class JuniperVPN:
         config = ConfigParser.RawConfigParser()
         config.add_section(self.section)
         config.set(self.section, "username", user)
-        if passwd != None:
-            config.set(self.section, "passwd", passwd)
-        else:
-            config.set(self.section, "passwd", "")
+        config.set(self.section, "passwd", passwd)
         config.set(self.section, "pin", pin)
         config.set(self.section, "ncui", ncui)
         config.set(self.section, "cert", cert)
